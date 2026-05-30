@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grand Pattern WASM — Mono-Vibe Visualization</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0a0f; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; }
+        #header { padding: 20px; text-align: center; }
+        #header h1 { font-size: 1.4em; color: #8be9fd; margin-bottom: 4px; }
+        #header p { font-size: 0.8em; color: #6272a4; }
+        #stats { display: flex; justify-content: center; gap: 30px; padding: 10px; font-size: 0.85em; }
+        .stat { text-align: center; }
+        .stat .label { color: #6272a4; font-size: 0.75em; }
+        .stat .value { color: #bd93f9; font-size: 1.1em; }
+        canvas { display: block; margin: 0 auto; }
+        #controls { text-align: center; padding: 15px; }
+        button {
+            background: #21222c; color: #8be9fd; border: 1px solid #44475a;
+            padding: 8px 16px; margin: 4px; cursor: pointer; border-radius: 4px;
+            font-family: inherit; font-size: 0.85em;
+        }
+        button:hover { background: #44475a; }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>◈ Grand Pattern — WASM</h1>
+        <p>Mono-vibe cell graph simulation</p>
+    </div>
+    <div id="stats">
+        <div class="stat"><div class="label">TICK</div><div class="value" id="tick">0</div></div>
+        <div class="stat"><div class="label">FLEET VIBE</div><div class="value" id="fv">0.00</div></div>
+        <div class="stat"><div class="label">FLEET SURPRISE</div><div class="value" id="fs">0.00</div></div>
+        <div class="stat"><div class="label">ROOMS</div><div class="value" id="rc">0</div></div>
+    </div>
+    <canvas id="graph" width="800" height="500"></canvas>
+    <div id="controls">
+        <button id="btnReset">Reset</button>
+        <button id="btnPause">Pause</button>
+        <button id="btnTopology">Change Topology</button>
+    </div>
+
+    <script type="module">
+        // This demo loads the WASM module built by wasm-pack
+        // Usage: wasm-pack build --target web --out-dir pkg
+        // Then serve this directory with any HTTP server
+
+        let wasm;
+        try {
+            const mod = await import('./pkg/grand_pattern_wasm.js');
+            wasm = mod;
+        } catch (e) {
+            document.body.innerHTML = `<div style="padding:40px;text-align:center;color:#ff5555">
+                <h2>⚠ WASM not built</h2>
+                <p>Run: <code>wasm-pack build --target web --out-dir pkg</code></p>
+                <p>Then serve this directory with an HTTP server.</p>
+            </div>`;
+            throw e;
+        }
+
+        const canvas = document.getElementById('graph');
+        const ctx = canvas.getContext('2d');
+        const N = 20;
+        let paused = false;
+        let topoIndex = 0;
+        const topologies = ['ring', 'chain', 'star', 'small-world'];
+
+        function createGraph(topo) {
+            const g = new wasm.WasmCellGraph();
+            for (let i = 0; i < N; i++) g.add_room(Math.random());
+            let edges;
+            switch (topo) {
+                case 'ring': edges = wasm.topology_ring(N); break;
+                case 'chain': edges = wasm.topology_chain(N); break;
+                case 'star': edges = wasm.topology_star(N); break;
+                case 'small-world': edges = wasm.topology_small_world(N, 0.3); break;
+            }
+            for (let i = 0; i < edges.length; i += 2) {
+                g.add_edge(edges[i], edges[i + 1], 1.0);
+            }
+            return g;
+        }
+
+        let graph = createGraph(topologies[topoIndex]);
+
+        // Position rooms in a circle
+        function roomPos(i, total) {
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+            const r = Math.min(cx, cy) - 60;
+            const angle = (2 * Math.PI * i) / total - Math.PI / 2;
+            return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+        }
+
+        function vibeToColor(v) {
+            // Map vibe (roughly 0-1) to hue (blue=low, green=mid, red=high)
+            const clamped = Math.max(0, Math.min(1, v));
+            const h = (1 - clamped) * 240;
+            return `hsl(${h}, 80%, 55%)`;
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0a0a0f';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw edges
+            ctx.strokeStyle = '#21222c';
+            ctx.lineWidth = 1;
+            // We can't read edges back directly, so we draw a ring/chain pattern
+            for (let i = 0; i < N; i++) {
+                const from = roomPos(i, N);
+                const to = roomPos((i + 1) % N, N);
+                ctx.beginPath();
+                ctx.moveTo(from.x, from.y);
+                ctx.lineTo(to.x, to.y);
+                ctx.stroke();
+            }
+
+            // Draw rooms
+            for (let i = 0; i < N; i++) {
+                const pos = roomPos(i, N);
+                const vibe = graph.room_vibe(i);
+                const surprise = graph.room_surprise(i);
+                const baseRadius = 12;
+                const radius = baseRadius + surprise * 15;
+
+                // Glow
+                const grad = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, radius * 2);
+                grad.addColorStop(0, vibeToColor(vibe));
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, radius * 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Solid circle
+                ctx.fillStyle = vibeToColor(vibe);
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Label
+                ctx.fillStyle = '#0a0a0f';
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(i, pos.x, pos.y);
+            }
+        }
+
+        function updateStats() {
+            document.getElementById('tick').textContent = graph.tick_count();
+            document.getElementById('fv').textContent = graph.fleet_vibe().toFixed(3);
+            document.getElementById('fs').textContent = graph.fleet_surprise().toFixed(3);
+            document.getElementById('rc').textContent = graph.room_count();
+        }
+
+        function animate() {
+            if (!paused) {
+                graph.diffuse(0.05);
+                graph.tick();
+                graph.learn();
+            }
+            draw();
+            updateStats();
+            requestAnimationFrame(animate);
+        }
+
+        document.getElementById('btnReset').addEventListener('click', () => {
+            graph = createGraph(topologies[topoIndex]);
+        });
+        document.getElementById('btnPause').addEventListener('click', function () {
+            paused = !paused;
+            this.textContent = paused ? 'Resume' : 'Pause';
+        });
+        document.getElementById('btnTopology').addEventListener('click', () => {
+            topoIndex = (topoIndex + 1) % topologies.length;
+            graph = createGraph(topologies[topoIndex]);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
